@@ -1,14 +1,14 @@
-name: Daily Stock Tickers Ingestion
+name: Weekly Stock Tickers Ingestion (Metadata)
 
 on:
   schedule:
-    # Runs daily at 01:00 UTC
-    - cron: '0 1 * * *'
-  # Allows triggering the job manually anytime from the GitHub Actions UI
+    # Runs weekly every Monday at 01:00 UTC
+    - cron: '0 1 * * 1'
+  # Allows triggering manually anytime from the GitHub Actions UI
   workflow_dispatch:
 
 jobs:
-  ingest-stock-data:
+  ingest-stock-tickers:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Stock Ingestion Script (Tickers)
+      - name: Run Stock Tickers Ingestion Script (Metadata)
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
@@ -37,17 +37,3 @@ jobs:
           SNOWFLAKE_TABLE: ${{ secrets.SNOWFLAKE_TABLE }}
         run: |
           python script.py
-
-      - name: Run Stock Prices Ingestion Script (OHLCV Prices)
-        env:
-          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
-          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
-          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
-          SNOWFLAKE_PRICES_TABLE: "STOCK_PRICES"
-        run: |
-          python fetch_prices.py
-
