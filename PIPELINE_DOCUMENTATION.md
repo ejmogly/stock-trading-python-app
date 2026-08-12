@@ -3,7 +3,7 @@
 ## 📋 Executive Summary
 This document provides full technical documentation for the production-grade automated stock data platform. The platform extracts company reference metadata and daily trading market data (OHLCV) from **Polygon.io** (Massive API), transforms the payloads with dynamic schema alignment and date partitioning (`ds`), and loads them into **Snowflake** (`EJAY_K.PUBLIC.STOCK_TICKERS` & `EJAY_K.PUBLIC.STOCK_PRICES`).
 
-The pipeline is 100% automated using **GitHub Actions**, executing daily in the cloud without requiring local laptop uptime or manual database administration.
+The pipeline is 100% automated using **GitHub Actions**, with **daily price ingestion** and **weekly ticker metadata updates** running in the cloud without requiring local laptop uptime or manual database administration.
 
 ---
 
@@ -35,20 +35,30 @@ The pipeline is 100% automated using **GitHub Actions**, executing daily in the 
 |  - Dimension Table: EJAY_K.PUBLIC.STOCK_TICKERS (Metadata)           |
 |  - Fact Table:      EJAY_K.PUBLIC.STOCK_PRICES  (OHLCV Prices)       |
 +----------------------------------------------------------------------+
-                                  ^
-                                  |  (Daily Cloud Cron @ 01:00 UTC)
+       ^                                                ^
+       | (Weekly Cron @ Monday 01:00 UTC)                | (Daily Cron @ 01:00 UTC)
 +----------------------------------------------------------------------+
-|                   GitHub Actions Cloud Runner                        |
-|                   [.github/workflows/daily_stock_job.yml]            |
+|                   GitHub Actions Cloud Runners                       |
+|  - .github/workflows/weekly_tickers.yml                              |
+|  - .github/workflows/daily_prices.yml                                |
 +----------------------------------------------------------------------+
 ```
+
+---
+
+## 🗓️ Cloud Orchestration Schedule
+
+| Workflow | Ingestion Target | Frequency | Execution Time (UTC) | Cron Expression |
+| :--- | :--- | :--- | :--- | :--- |
+| **Daily Stock Prices** | Trading Prices (OHLCV) $\rightarrow$ `STOCK_PRICES` | Every Day | 01:00 AM UTC | `0 1 * * *` |
+| **Weekly Stock Tickers** | Company Metadata $\rightarrow$ `STOCK_TICKERS` | Weekly (Mondays) | 01:00 AM UTC | `0 1 * * 1` |
 
 ---
 
 ## 💾 Dual Table Data Model
 
 ### 1. `STOCK_TICKERS` (Dimension Table - Metadata)
-Stores reference data for companies, exchanges, SEC CIK numbers, and active trading status.
+Stores reference data for companies, exchanges, SEC CIK numbers, and active trading status. Updated weekly on Mondays.
 * `TICKER` (`VARCHAR`): Stock ticker symbol (e.g. `AAPL`, `MSFT`)
 * `NAME` (`VARCHAR`): Company full legal name
 * `MARKET` (`VARCHAR`): Market category (`stocks`)
@@ -64,7 +74,7 @@ Stores reference data for companies, exchanges, SEC CIK numbers, and active trad
 * `DS` (`DATE`): Daily partition date (`YYYY-MM-DD`)
 
 ### 2. `STOCK_PRICES` (Fact Table - Market OHLCV Prices)
-Stores daily trading prices and volume for financial analytics and visualization.
+Stores daily trading prices and volume for financial analytics and visualization. Updated daily.
 * `TICKER` (`VARCHAR`): Stock ticker symbol
 * `OPEN` (`FLOAT`): Opening market price
 * `HIGH` (`FLOAT`): Highest price of the day
@@ -98,8 +108,9 @@ Stores daily trading prices and volume for financial analytics and visualization
 
 ## 📂 Repository Code Files
 
-* **`script.py`**: Daily stock reference metadata ingestion script.
+* **`script.py`**: Daily/Weekly stock reference metadata ingestion script.
 * **`fetch_prices.py`**: Daily & historical stock price ingestion script.
 * **`backfill.py`**: Historical ticker metadata backfill script.
 * **`scheduler.py`**: Local daemon schedule runner.
-* **`.github/workflows/daily_stock_job.yml`**: GitHub Actions daily cloud automation workflow.
+* **`.github/workflows/daily_prices.yml`**: GitHub Actions daily price ingestion workflow.
+* **`.github/workflows/weekly_tickers.yml`**: GitHub Actions weekly ticker metadata workflow.

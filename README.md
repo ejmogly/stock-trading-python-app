@@ -1,13 +1,14 @@
 # Automated Stock Market Data Platform: Polygon API to Snowflake
 
-[![Daily Stock Tickers & Prices Ingestion](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_stock_job.yml/badge.svg)](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_stock_job.yml)
+[![Daily Stock Prices Ingestion](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_prices.yml/badge.svg)](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_prices.yml)
+[![Weekly Stock Tickers Ingestion](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/weekly_tickers.yml/badge.svg)](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/weekly_tickers.yml)
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)
 ![Snowflake](https://img.shields.io/badge/Snowflake-Data_Warehouse-00A1E9.svg)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Automation-2088FF.svg)
 
 A production-grade, automated data engineering platform built to extract daily stock reference metadata and grouped daily OHLCV trading prices from **Polygon.io** (Massive API), transform them with dynamic schema alignment and date partitioning (`ds`), and load them into **Snowflake** data warehouse (`STOCK_TICKERS` & `STOCK_PRICES`).
 
-The pipeline is 100% automated using **GitHub Actions**, running daily in the cloud without requiring local server uptime or manual database administration.
+The pipeline is 100% automated using **GitHub Actions**, with **daily price ingestion** and **weekly ticker metadata updates** running in the cloud without requiring local server uptime or manual database administration.
 
 ---
 
@@ -39,13 +40,23 @@ The pipeline is 100% automated using **GitHub Actions**, running daily in the cl
 |  - Dimension Table: EJAY_K.PUBLIC.STOCK_TICKERS (Metadata)           |
 |  - Fact Table:      EJAY_K.PUBLIC.STOCK_PRICES  (OHLCV Prices)       |
 +----------------------------------------------------------------------+
-                                  ^
-                                  |  (Daily Cloud Cron @ 01:00 UTC)
+       ^                                                ^
+       | (Weekly Cron @ Monday 01:00 UTC)                | (Daily Cron @ 01:00 UTC)
 +----------------------------------------------------------------------+
-|                   GitHub Actions Cloud Runner                        |
-|                   [.github/workflows/daily_stock_job.yml]            |
+|                   GitHub Actions Cloud Runners                       |
+|  - .github/workflows/weekly_tickers.yml                              |
+|  - .github/workflows/daily_prices.yml                                |
 +----------------------------------------------------------------------+
 ```
+
+---
+
+## 🗓️ Cloud Orchestration Schedule
+
+| Workflow | Ingestion Target | Frequency | Execution Time (UTC) | Cron Expression |
+| :--- | :--- | :--- | :--- | :--- |
+| **Daily Stock Prices** | Trading Prices (OHLCV) $\rightarrow$ `STOCK_PRICES` | Every Day | 01:00 AM UTC | `0 1 * * *` |
+| **Weekly Stock Tickers** | Company Metadata $\rightarrow$ `STOCK_TICKERS` | Weekly (Mondays) | 01:00 AM UTC | `0 1 * * 1` |
 
 ---
 
@@ -53,8 +64,8 @@ The pipeline is 100% automated using **GitHub Actions**, running daily in the cl
 
 | Table Name | Entity Type | Columns / Schema | Description |
 | :--- | :--- | :--- | :--- |
-| **`STOCK_TICKERS`** | Dimension Table | `TICKER`, `NAME`, `MARKET`, `LOCALE`, `PRIMARY_EXCHANGE`, `TYPE`, `ACTIVE`, `CURRENCY_NAME`, `CIK`, `COMPOSITE_FIGI`, `SHARE_CLASS_FIGI`, `LAST_UPDATED_UTC`, `DS` | Master directory of stock reference metadata (companies, exchanges, CIKs, security types). |
-| **`STOCK_PRICES`** | Fact Table | `TICKER`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VOLUME`, `VWAP`, `TRANSACTIONS`, `DS` | Daily trading market price data (OHLCV) for point-in-time financial analysis & charting. |
+| **`STOCK_TICKERS`** | Dimension Table | `TICKER`, `NAME`, `MARKET`, `LOCALE`, `PRIMARY_EXCHANGE`, `TYPE`, `ACTIVE`, `CURRENCY_NAME`, `CIK`, `COMPOSITE_FIGI`, `SHARE_CLASS_FIGI`, `LAST_UPDATED_UTC`, `DS` | Master directory of stock reference metadata (companies, exchanges, CIKs, security types). Updated weekly. |
+| **`STOCK_PRICES`** | Fact Table | `TICKER`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VOLUME`, `VWAP`, `TRANSACTIONS`, `DS` | Daily trading market price data (OHLCV) for point-in-time financial analysis & charting. Updated daily. |
 
 ---
 
@@ -93,7 +104,8 @@ The pipeline is 100% automated using **GitHub Actions**, running daily in the cl
 stock-trading-python-app/
 ├── .github/
 │   └── workflows/
-│       └── daily_stock_job.yml   # Automated daily GitHub Actions workflow
+│       ├── daily_prices.yml      # GitHub Actions daily workflow for stock prices
+│       └── weekly_tickers.yml    # GitHub Actions weekly workflow for ticker metadata
 ├── .env                          # Local environment variables (ignored by Git)
 ├── .gitignore                    # Git exclusion rules
 ├── PIPELINE_DOCUMENTATION.md     # Detailed English technical documentation
@@ -103,22 +115,24 @@ stock-trading-python-app/
 ├── backfill.py                   # Historical ticker reference backfill script
 ├── fetch_prices.py               # Daily & historical stock price ingestion script
 ├── scheduler.py                  # Local Python schedule daemon
-└── script.py                     # Daily stock ticker reference ingestion script
+└── script.py                     # Daily/Weekly stock ticker reference ingestion script
 ```
 
 ---
 
 ## 💻 Usage & Execution Guide
 
-### 1. Automated Daily Ingestion (GitHub Actions)
-Runs automatically every day at 01:00 UTC. Can also be manually triggered anytime via **GitHub Repo $\rightarrow$ Actions $\rightarrow$ Daily Stock Tickers Ingestion $\rightarrow$ Run workflow**.
+### 1. Automated Cloud Ingestion (GitHub Actions)
+* **Daily Prices**: Runs every day at 01:00 UTC (`daily_prices.yml`).
+* **Weekly Tickers**: Runs every Monday at 01:00 UTC (`weekly_tickers.yml`).
+* Both workflows can be manually triggered anytime via **GitHub Repo $\rightarrow$ Actions $\rightarrow$ Select Workflow $\rightarrow$ Run workflow**.
 
-### 2. Manual Daily Run
+### 2. Manual Local Run
 ```bash
-# Ingest current stock ticker metadata
+# Ingest current stock ticker metadata (Weekly)
 python3 script.py
 
-# Ingest yesterday's stock trading prices (OHLCV)
+# Ingest yesterday's stock trading prices (Daily)
 python3 fetch_prices.py
 ```
 
@@ -129,12 +143,6 @@ python3 fetch_prices.py --start 2026-07-01 --end 2026-07-31
 
 # Backfill last 30 days of stock prices
 python3 fetch_prices.py --days 30
-```
-
-### 4. Backfilling Historical Ticker Reference Data
-```bash
-# Backfill ticker metadata for a specific date range
-python3 backfill.py --start 2026-08-01 --end 2026-08-11
 ```
 
 ---
