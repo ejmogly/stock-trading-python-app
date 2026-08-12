@@ -116,6 +116,7 @@ def main():
     parser.add_argument("--start", type=str, help="Start date in YYYY-MM-DD format (e.g. 2026-08-01)")
     parser.add_argument("--end", type=str, help="End date in YYYY-MM-DD format (e.g. 2026-08-11)")
     parser.add_argument("--days", type=int, help="Number of past days to backfill (e.g. 5)")
+    parser.add_argument("--monthly", action="store_true", help="Backfill only 1st day of each month for fast multi-year backfilling")
 
     args = parser.parse_args()
 
@@ -136,8 +137,8 @@ def main():
         end_dt = datetime.now() - timedelta(days=1)
         start_dt = end_dt - timedelta(days=1)
 
-
-    print(f"Initializing Backfill Execution: {start_dt.strftime('%Y-%m-%d')} -> {end_dt.strftime('%Y-%m-%d')}")
+    mode_str = "Monthly Snapshots" if args.monthly else "Daily Incremental"
+    print(f"Initializing Backfill Execution [{mode_str}]: {start_dt.strftime('%Y-%m-%d')} -> {end_dt.strftime('%Y-%m-%d')}")
 
     conn = snowflake.connector.connect(
         user=SNOWFLAKE_USER,
@@ -152,7 +153,15 @@ def main():
     while curr_dt <= end_dt:
         ds_date = curr_dt.strftime('%Y-%m-%d')
         backfill_single_date(ds_date, conn)
-        curr_dt += timedelta(days=1)
+        
+        if args.monthly:
+            if curr_dt.month == 12:
+                curr_dt = curr_dt.replace(year=curr_dt.year + 1, month=1, day=1)
+            else:
+                curr_dt = curr_dt.replace(month=curr_dt.month + 1, day=1)
+        else:
+            curr_dt += timedelta(days=1)
+
 
     conn.close()
     print("\n🎉 All historical backfill dates completed successfully!")
