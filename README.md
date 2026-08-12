@@ -1,75 +1,89 @@
-# Automated Stock Data Pipeline: Polygon API to Snowflake
+# Automated Stock Market Data Platform: Polygon API to Snowflake
 
-[![Daily Stock Tickers Ingestion](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_stock_job.yml/badge.svg)](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_stock_job.yml)
+[![Daily Stock Tickers & Prices Ingestion](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_stock_job.yml/badge.svg)](https://github.com/ejmogly/stock-trading-python-app/actions/workflows/daily_stock_job.yml)
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)
 ![Snowflake](https://img.shields.io/badge/Snowflake-Data_Warehouse-00A1E9.svg)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Automation-2088FF.svg)
 
-A production-grade, automated data engineering pipeline built to extract daily stock reference market data from **Polygon.io** (Massive API), transform it with dynamic schema alignment and date partitioning (`ds`), and batch load it into **Snowflake** (`EJAY_K.PUBLIC.STOCK_TICKERS`). 
+A production-grade, automated data engineering platform built to extract daily stock reference metadata and grouped daily OHLCV trading prices from **Polygon.io** (Massive API), transform them with dynamic schema alignment and date partitioning (`ds`), and load them into **Snowflake** data warehouse (`STOCK_TICKERS` & `STOCK_PRICES`).
 
-The pipeline is fully automated using **GitHub Actions**, running daily in the cloud without requiring local server uptime or manual database administration.
+The pipeline is 100% automated using **GitHub Actions**, running daily in the cloud without requiring local server uptime or manual database administration.
 
 ---
 
 ## 🏗️ Architecture & Data Flow
 
 ```
-+---------------------------------+
-|  Polygon.io (Massive API)       |
-|  /v3/reference/tickers          |
-+---------------------------------+
-                |
-                v  (5 req/min rate-limited pagination)
-+---------------------------------+
-|  Python ETL Pipeline            |
-|  [script.py]                    |
-|  - Rate-limit Backoff (12s)     |
-|  - Datestamp Tagging (ds)       |
-|  - Dynamic Schema Mapping       |
-|  - Idempotent Partition Overwrite|
-+---------------------------------+
-                |
-                v  (Snowflake Connector executemany)
-+---------------------------------+
-|  Snowflake Data Warehouse       |
-|  EJAY_K.PUBLIC.STOCK_TICKERS    |
-+---------------------------------+
-                ^
-                |  (Daily Cloud Cron @ 01:00 UTC)
-+---------------------------------+
-|  GitHub Actions Cloud Runner    |
-|  [.github/workflows/daily...]   |
-+---------------------------------+
++----------------------------------------------------------------------+
+|                     Polygon.io (Massive API)                         |
+|  - Reference Metadata: /v3/reference/tickers                         |
+|  - Daily OHLCV Prices: /v2/aggs/grouped/locale/us/market/stocks      |
++----------------------------------------------------------------------+
+                                  |
+                                  v  (Rate-Limited Pagination & Grouped Endpoints)
++----------------------------------------------------------------------+
+|                     Python ETL Data Pipeline                         |
+|                                                                      |
+|  1. script.py        --> Master Ticker Reference Metadata            |
+|  2. fetch_prices.py  --> Daily Grouped Stock Prices (OHLCV)          |
+|  3. backfill.py      --> Historical Ticker Metadata Backfilling      |
+|                                                                      |
+|  Features: Exponential Rate-Limit Backoff (12s), Datestamp Tagging   |
+|            (ds), Dynamic Schema Mapping, Idempotent Overwrites       |
++----------------------------------------------------------------------+
+                                  |
+                                  v  (Snowflake Connector executemany)
++----------------------------------------------------------------------+
+|                     Snowflake Data Warehouse                         |
+|                                                                      |
+|  - Dimension Table: EJAY_K.PUBLIC.STOCK_TICKERS (Metadata)           |
+|  - Fact Table:      EJAY_K.PUBLIC.STOCK_PRICES  (OHLCV Prices)       |
++----------------------------------------------------------------------+
+                                  ^
+                                  |  (Daily Cloud Cron @ 01:00 UTC)
++----------------------------------------------------------------------+
+|                   GitHub Actions Cloud Runner                        |
+|                   [.github/workflows/daily_stock_job.yml]            |
++----------------------------------------------------------------------+
 ```
+
+---
+
+## 💾 Dual Table Data Model in Snowflake
+
+| Table Name | Entity Type | Columns / Schema | Description |
+| :--- | :--- | :--- | :--- |
+| **`STOCK_TICKERS`** | Dimension Table | `TICKER`, `NAME`, `MARKET`, `LOCALE`, `PRIMARY_EXCHANGE`, `TYPE`, `ACTIVE`, `CURRENCY_NAME`, `CIK`, `COMPOSITE_FIGI`, `SHARE_CLASS_FIGI`, `LAST_UPDATED_UTC`, `DS` | Master directory of stock reference metadata (companies, exchanges, CIKs, security types). |
+| **`STOCK_PRICES`** | Fact Table | `TICKER`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VOLUME`, `VWAP`, `TRANSACTIONS`, `DS` | Daily trading market price data (OHLCV) for point-in-time financial analysis & charting. |
 
 ---
 
 ## 🛠️ Key Technical Features & Solved Challenges
 
-### 1. API Rate Limiting (5 Requests / Minute)
-* **Problem**: Polygon.io Free/Basic tier restricts requests to 5 calls per minute. Running rapid pagination requests causes HTTP 429 errors (`You've exceeded the maximum requests per minute...`), prematurely terminating ingestion at 5,000 tickers.
-* **Solution**: `fetch_json_with_retry()` automatically catches HTTP 429 responses and `"error"` JSON objects, pausing execution for 12 seconds (`time.sleep(12)`) before retrying. This allows the script to gracefully fetch all ~13,000+ tickers across 14 pages.
+### 1. Ultra-Fast Daily Price Ingestion (1 Call per Day)
+* **Design**: Uses Polygon's Grouped Daily Aggregates API (`/v2/aggs/grouped/locale/us/market/stocks/{date}`).
+* **Performance**: Fetches all 12,000+ daily stock prices for an entire market day in **1 single API call (~3 seconds)**, making 1 month of price backfills finish in under 2 minutes.
 
-### 2. Idempotency & Duplicate Prevention
-* **Problem**: Re-running the pipeline multiple times on the same date resulted in duplicate rows.
-* **Solution**: Added partition cleanup prior to insertion:
+### 2. API Rate Limiting Management (5 Requests / Minute)
+* **Problem**: Polygon.io Basic tier limits calls to 5 per minute. Rapid requests trigger HTTP 429 rate limit errors.
+* **Solution**: Custom `fetch_json_with_retry()` wrapper catches HTTP 429 errors and `"error"` JSON objects, automatically pausing 12 seconds (`time.sleep(12)`) before retrying.
+
+### 3. Idempotency & Duplicate Prevention
+* **Problem**: Re-running pipelines on the same date accumulated duplicate rows.
+* **Solution**: Automatic partition cleanup prior to insertion:
   ```sql
-  DELETE FROM "STOCK_TICKERS" WHERE "DS" = '2026-08-12'
+  DELETE FROM "STOCK_TICKERS" WHERE "DS" = '2026-08-12';
+  DELETE FROM "STOCK_PRICES" WHERE "DS" = '2026-08-12';
   ```
-  Guarantees that re-running the job on the same day always produces **exactly 1 clean snapshot of 13,084 rows**.
+  Guarantees exactly 1 clean snapshot per date regardless of re-run frequency.
 
-### 3. Dynamic Schema & Typed DDL Creation
-* **Problem**: Manual Snowflake DDL requires maintenance, while untyped staging tables treat dates and booleans as strings.
-* **Solution**: Implemented typed DDL auto-generation in `script.py`:
+### 4. Typed DDL & Dynamic Schema Evolution
+* **Solution**: Dynamically inspects existing tables using `DESCRIBE TABLE` and auto-generates typed columns:
   - `ACTIVE` $\rightarrow$ `BOOLEAN`
   - `LAST_UPDATED_UTC` $\rightarrow$ `TIMESTAMP_NTZ`
   - `DS` $\rightarrow$ `DATE`
-  - All other fields $\rightarrow$ `VARCHAR`
-  - Runs `DESCRIBE TABLE` and executes `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` if new API fields appear.
-
-### 4. 24/7 Cloud Automation (GitHub Actions)
-* **Problem**: Running scripts locally pauses when the computer is closed or asleep.
-* **Solution**: Created `.github/workflows/daily_stock_job.yml` to trigger the Python job daily at 01:00 UTC on GitHub's cloud runners.
+  - `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VWAP` $\rightarrow$ `FLOAT`
+  - `VOLUME`, `TRANSACTIONS` $\rightarrow$ `NUMBER`
 
 ---
 
@@ -79,197 +93,65 @@ The pipeline is fully automated using **GitHub Actions**, running daily in the c
 stock-trading-python-app/
 ├── .github/
 │   └── workflows/
-│       └── daily_stock_job.yml   # GitHub Actions workflow for daily automation
-├── .env                          # Local environment secrets (ignored by Git)
-├── .gitignore                    # Prevents secrets & cache files from being committed
-├── README.md                     # Comprehensive repository documentation
-├── requirements.txt              # Required Python packages
+│       └── daily_stock_job.yml   # Automated daily GitHub Actions workflow
+├── .env                          # Local environment variables (ignored by Git)
+├── .gitignore                    # Git exclusion rules
+├── PIPELINE_DOCUMENTATION.md     # Detailed English technical documentation
+├── PIPELINE_DOCUMENTATION_KR.md  # Detailed Korean technical documentation
+├── README.md                     # GitHub repository front page
+├── requirements.txt              # Python dependency requirements
+├── backfill.py                   # Historical ticker reference backfill script
+├── fetch_prices.py               # Daily & historical stock price ingestion script
 ├── scheduler.py                  # Local Python schedule daemon
-└── script.py                     # Main ETL ingestion script
+└── script.py                     # Daily stock ticker reference ingestion script
 ```
 
 ---
 
-## 💻 Core Code Implementations
+## 💻 Usage & Execution Guide
 
-### 1. Ingestion & Snowflake Load (`script.py`)
+### 1. Automated Daily Ingestion (GitHub Actions)
+Runs automatically every day at 01:00 UTC. Can also be manually triggered anytime via **GitHub Repo $\rightarrow$ Actions $\rightarrow$ Daily Stock Tickers Ingestion $\rightarrow$ Run workflow**.
 
-```python
-from datetime import datetime
-import os 
-import time
-import requests
-import snowflake.connector
-from dotenv import load_dotenv
+### 2. Manual Daily Run
+```bash
+# Ingest current stock ticker metadata
+python3 script.py
 
-load_dotenv()
-
-POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
-SNOWFLAKE_USER = os.getenv("SNOWFLAKE_USER")
-SNOWFLAKE_PASSWORD = os.getenv("SNOWFLAKE_PASSWORD")
-SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT")
-SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH")
-SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE", "EJAY_K")
-SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "PUBLIC")
-SNOWFLAKE_TABLE = os.getenv("SNOWFLAKE_TABLE", "STOCK_TICKERS")
-
-LIMIT = 1000
-
-# Explicit column data types mapping for Snowflake DDL
-COLUMN_TYPE_MAP = {
-    'ACTIVE': 'BOOLEAN',
-    'LAST_UPDATED_UTC': 'TIMESTAMP_NTZ',
-    'DS': 'DATE'
-}
-
-def fetch_json_with_retry(url):
-    """Fetch URL and handle Polygon API rate limits (5 req/min on Free Tier)."""
-    full_url = url if "apiKey" in url else f"{url}&apiKey={POLYGON_API_KEY}"
-    while True:
-        response = requests.get(full_url)
-        data = response.json()
-        if response.status_code == 429 or "error" in data:
-            print("Polygon API rate limit reached (5 req/min). Waiting 12 seconds...")
-            time.sleep(12)
-            continue
-        return data
-
-def run_stock_job():
-    ds_date = datetime.now().strftime('%Y-%m-%d')
-    url = f'https://api.massive.com/v3/reference/tickers?market=stocks&active=true&order=asc&limit={LIMIT}&sort=ticker&apiKey={POLYGON_API_KEY}'
-    
-    tickers = []
-    data = fetch_json_with_retry(url)
-    if 'results' in data:
-        for ticker in data['results']:
-            ticker['ds'] = ds_date
-            tickers.append(ticker)
-
-    while 'next_url' in data and data['next_url']:
-        print('requesting next page:', data['next_url'])
-        data = fetch_json_with_retry(data['next_url'])
-        if 'results' in data:
-            for ticker in data['results']:
-                ticker['ds'] = ds_date
-                tickers.append(ticker)
-
-    print(f"Total tickers fetched: {len(tickers)}")
-
-    if tickers:
-        # Dynamically extract all unique field names from tickers
-        fieldnames = []
-        for ticker in tickers:
-            for key in ticker.keys():
-                if key not in fieldnames:
-                    fieldnames.append(key)
-
-        print("Connecting to Snowflake...")
-        conn = snowflake.connector.connect(
-            user=SNOWFLAKE_USER,
-            password=SNOWFLAKE_PASSWORD,
-            account=SNOWFLAKE_ACCOUNT,
-            warehouse=SNOWFLAKE_WAREHOUSE,
-            database=SNOWFLAKE_DATABASE,
-            schema=SNOWFLAKE_SCHEMA
-        )
-        cur = conn.cursor()
-
-        # Check if destination table exists and alter/create as needed with typed columns
-        try:
-            cur.execute(f'DESCRIBE TABLE "{SNOWFLAKE_TABLE}"')
-            existing_cols = [r[0].upper() for r in cur.fetchall()]
-            for col in fieldnames:
-                if col.upper() not in existing_cols:
-                    col_type = COLUMN_TYPE_MAP.get(col.upper(), 'VARCHAR')
-                    cur.execute(f'ALTER TABLE "{SNOWFLAKE_TABLE}" ADD COLUMN IF NOT EXISTS "{col.upper()}" {col_type}')
-        except Exception:
-            cols_sql_parts = []
-            for col in fieldnames:
-                col_type = COLUMN_TYPE_MAP.get(col.upper(), 'VARCHAR')
-                cols_sql_parts.append(f'"{col.upper()}" {col_type}')
-            cols_sql = ", ".join(cols_sql_parts)
-            cur.execute(f'CREATE TABLE IF NOT EXISTS "{SNOWFLAKE_TABLE}" ({cols_sql})')
-
-        # Read exact column layout of destination table
-        cur.execute(f'DESCRIBE TABLE "{SNOWFLAKE_TABLE}"')
-        target_cols = [r[0].upper() for r in cur.fetchall()]
-
-        # Delete existing data for today's partition date before inserting (Idempotent Load)
-        print(f"Clearing any existing data for DS = '{ds_date}'...")
-        cur.execute(f'DELETE FROM "{SNOWFLAKE_TABLE}" WHERE "DS" = \'{ds_date}\'')
-
-        # Prepare batch insertion statement
-        cols_list = ", ".join([f'"{col}"' for col in target_cols])
-        placeholders = ", ".join(["%s"] * len(target_cols))
-        insert_query = f'INSERT INTO "{SNOWFLAKE_TABLE}" ({cols_list}) VALUES ({placeholders})'
-
-        rows_to_insert = [
-            tuple(ticker.get(col.lower()) if ticker.get(col.lower()) is not None else None for col in target_cols)
-            for ticker in tickers
-        ]
-
-        batch_size = 5000
-        for i in range(0, len(rows_to_insert), batch_size):
-            batch = rows_to_insert[i:i + batch_size]
-            cur.executemany(insert_query, batch)
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print(f"Successfully dumped {len(tickers)} tickers to Snowflake table '{SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.{SNOWFLAKE_TABLE}'")
-
-if __name__ == '__main__':
-    run_stock_job()
+# Ingest yesterday's stock trading prices (OHLCV)
+python3 fetch_prices.py
 ```
 
----
+### 3. Backfilling Historical Stock Prices
+```bash
+# Backfill July 2026 stock prices (Full Month in ~2 mins)
+python3 fetch_prices.py --start 2026-07-01 --end 2026-07-31
 
-## 🔒 Configuration & Environment Secrets
-
-### 1. Local `.env` file (Local Testing)
-```ini
-POLYGON_API_KEY = "your_polygon_key"
-SNOWFLAKE_USER = "your_user"
-SNOWFLAKE_PASSWORD = "your_password"
-SNOWFLAKE_ACCOUNT = "your_account"
-SNOWFLAKE_WAREHOUSE = "COMPUTE_WH"
-SNOWFLAKE_DATABASE = "EJAY_K"
-SNOWFLAKE_SCHEMA = "PUBLIC"
-SNOWFLAKE_TABLE = "STOCK_TICKERS"
+# Backfill last 30 days of stock prices
+python3 fetch_prices.py --days 30
 ```
 
-### 2. GitHub Repository Secrets (Cloud Deployment)
-Added via **GitHub Repo $\rightarrow$ Settings $\rightarrow$ Secrets and variables $\rightarrow$ Actions**:
-* `POLYGON_API_KEY`
-* `SNOWFLAKE_USER`
-* `SNOWFLAKE_PASSWORD`
-* `SNOWFLAKE_ACCOUNT`
-* `SNOWFLAKE_WAREHOUSE`
-* `SNOWFLAKE_DATABASE`
-* `SNOWFLAKE_SCHEMA`
-* `SNOWFLAKE_TABLE`
+### 4. Backfilling Historical Ticker Reference Data
+```bash
+# Backfill ticker metadata for a specific date range
+python3 backfill.py --start 2026-08-01 --end 2026-08-11
+```
 
 ---
 
 ## 📊 Verification Queries (Snowflake Worksheets)
 
-Run these queries anytime in Snowflake to check status and partition counts:
-
 ```sql
--- 1. Check total count loaded by partition date (ds)
-SELECT DS, COUNT(*) 
-FROM EJAY_K.PUBLIC.STOCK_TICKERS 
-GROUP BY DS 
-ORDER BY DS DESC;
+-- 1. Check loaded row counts by date partition
+SELECT DS, COUNT(*) FROM EJAY_K.PUBLIC.STOCK_TICKERS GROUP BY DS ORDER BY DS DESC;
+SELECT DS, COUNT(*) FROM EJAY_K.PUBLIC.STOCK_PRICES GROUP BY DS ORDER BY DS DESC;
 
--- 2. Inspect latest tickers
-SELECT TICKER, NAME, MARKET, TYPE, ACTIVE, LAST_UPDATED_UTC, DS
-FROM EJAY_K.PUBLIC.STOCK_TICKERS 
-WHERE DS = CURRENT_DATE()
-ORDER BY TICKER 
+-- 2. Join price data with ticker metadata for analysis/visualization
+SELECT p.DS, p.TICKER, t.NAME, t.PRIMARY_EXCHANGE, p.CLOSE, p.VOLUME, p.VWAP
+FROM EJAY_K.PUBLIC.STOCK_PRICES p
+JOIN EJAY_K.PUBLIC.STOCK_TICKERS t ON p.TICKER = t.TICKER
+WHERE p.DS = CURRENT_DATE() - 1
+  AND t.TYPE = 'CS'
+ORDER BY p.VOLUME DESC
 LIMIT 20;
-
--- 3. Verify column data types
-DESCRIBE TABLE EJAY_K.PUBLIC.STOCK_TICKERS;
 ```
