@@ -97,6 +97,10 @@ def run_stock_job():
         cur.execute(f'DESCRIBE TABLE "{SNOWFLAKE_TABLE}"')
         target_cols = [r[0].upper() for r in cur.fetchall()]
 
+        # Delete existing data for today's partition date before inserting to guarantee no duplicates (Idempotent Load)
+        print(f"Clearing any existing data for DS = '{ds_date}'...")
+        cur.execute(f'DELETE FROM "{SNOWFLAKE_TABLE}" WHERE "DS" = \'{ds_date}\'')
+
         # Prepare batch insertion statement
         cols_list = ", ".join([f'"{col}"' for col in target_cols])
         placeholders = ", ".join(["%s"] * len(target_cols))
@@ -113,6 +117,7 @@ def run_stock_job():
             cur.executemany(insert_query, batch)
 
         conn.commit()
+
         cur.close()
         conn.close()
 
