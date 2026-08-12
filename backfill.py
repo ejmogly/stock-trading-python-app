@@ -123,12 +123,19 @@ def main():
         end_dt = datetime.now() - timedelta(days=1)
         start_dt = end_dt - timedelta(days=args.days - 1)
     elif args.start and args.end:
-        start_dt = datetime.strptime(args.start, '%Y-%m-%d')
-        end_dt = datetime.strptime(args.end, '%Y-%m-%d')
+        start_str = args.start.strip()
+        end_str = args.end.strip()
+        try:
+            start_dt = datetime.strptime(start_str, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_str, '%Y-%m-%d')
+        except ValueError as e:
+            print(f"Error parsing dates. Please ensure dates are in YYYY-MM-DD format without extra characters. Details: {e}")
+            sys.exit(1)
     else:
         # Default: backfill past 2 days if no arguments passed
         end_dt = datetime.now() - timedelta(days=1)
         start_dt = end_dt - timedelta(days=1)
+
 
     print(f"Initializing Backfill Execution: {start_dt.strftime('%Y-%m-%d')} -> {end_dt.strftime('%Y-%m-%d')}")
 
