@@ -120,9 +120,10 @@ def main():
             print(f"Error parsing dates. Please format as YYYY-MM-DD. Details: {e}")
             sys.exit(1)
     else:
-        # Default: fetch yesterday's stock prices
+        # Default: auto-fetch past 3 days to guarantee zero data gaps or missed days
         end_dt = datetime.now() - timedelta(days=1)
-        start_dt = end_dt
+        start_dt = end_dt - timedelta(days=2)
+
 
     print(f"Initializing Price Fetch Execution: {start_dt.strftime('%Y-%m-%d')} -> {end_dt.strftime('%Y-%m-%d')}")
 
