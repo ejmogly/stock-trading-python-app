@@ -96,6 +96,11 @@ The pipeline is 100% automated using **GitHub Actions**, with **daily price inge
   - `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VWAP` $\rightarrow$ `FLOAT`
   - `VOLUME`, `TRANSACTIONS` $\rightarrow$ `NUMBER`
 
+### 5. Self-Healing Auto-Backfill
+* **Design**: Every daily automated price run scans and ingests the past 3 trading days instead of just 1 single day.
+* **Benefit**: Guarantees zero data gaps even during unexpected network outages, API delays, or weekend transitions without requiring any manual backfilling.
+
+
 ---
 
 ## 📂 Project Repository Structure
