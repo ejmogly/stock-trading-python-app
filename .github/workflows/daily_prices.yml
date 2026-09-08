@@ -1,11 +1,12 @@
 name: Daily Stock Prices Ingestion (OHLCV)
 
 on:
-  schedule:
-    # Runs daily at 01:00 UTC
-    - cron: '0 1 * * *'
+  # schedule:
+  #   # Runs daily at 01:00 UTC (Paused until new Snowflake account is connected)
+  #   - cron: '0 1 * * *'
   # Allows triggering manually anytime from the GitHub Actions UI
   workflow_dispatch:
+
 
 jobs:
   ingest-stock-prices:

@@ -1,11 +1,12 @@
 name: Weekly Stock Tickers Ingestion (Metadata)
 
 on:
-  schedule:
-    # Runs weekly every Monday at 01:00 UTC
-    - cron: '0 1 * * 1'
+  # schedule:
+  #   # Runs weekly every Monday at 01:00 UTC (Paused until new Snowflake account is connected)
+  #   - cron: '0 1 * * 1'
   # Allows triggering manually anytime from the GitHub Actions UI
   workflow_dispatch:
+
 
 jobs:
   ingest-stock-tickers:
